@@ -14,7 +14,7 @@ pinned: false
 
 > Offline microscopy assistant for Neglected Tropical Diseases — powered by MedGemma 4B, hardened with rule-based morphology validation to prevent biologically impossible diagnoses.
 
-![NTD-Assist Interface](screenshots/interface.png)
+[![Try on HF Spaces](https://img.shields.io/badge/%F0%A4%8D-Try%20on%20HF%20Spaces-brightgreen)](https://huggingface.co/spaces/mofary/ntd-assist)
 ---
 
 ## 🔑 Why This Matters
