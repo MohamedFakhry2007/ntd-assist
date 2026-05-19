@@ -226,24 +226,24 @@ def main():
                 st.markdown("---")
                 st.subheader("📊 Analysis Results")
 
-                if "Negative" in res.detected_disease:
-                    st.success(f"## ✅ {res.detected_disease}")
-                elif res.detected_disease == "Unclear":
-                    st.warning(f"## ⚠️ {res.detected_disease}")
+                if "Negative" in res.label:
+                    st.success(f"## ✅ {res.label}")
+                elif res.label == "Unclear":
+                    st.warning(f"## ⚠️ {res.label}")
                 else:
-                    st.error(f"## 🚨 {res.detected_disease}")
+                    st.error(f"## 🚨 {res.label}")
 
                 metric_col1, metric_col2, metric_col3 = st.columns(3)
                 with metric_col1:
-                    st.metric("Species", res.species)
+                    st.metric("Species", res.metadata.get("species", "Unknown"))
                 with metric_col2:
-                    st.metric("Severity", res.severity)
+                    st.metric("Severity", res.metadata.get("severity", "N/A"))
                 with metric_col3:
                     st.metric("Confidence", res.confidence)
 
                 with st.expander("📋 Detailed Report", expanded=True):
                     st.markdown("**Morphological Evidence:**")
-                    st.info(res.morphology_proof)
+                    st.info(res.evidence)
 
                     st.markdown("**Detailed Findings:**")
                     st.write(res.findings)
@@ -251,7 +251,7 @@ def main():
                     st.markdown("**Recommendation:**")
                     st.success(res.recommendation)
 
-                if res.detected_disease not in ["Unclear"]:
+                if res.label not in ["Unclear"]:
                     st.markdown("---")
                     pdf_bytes = create_pdf(res, sample, stain, mag, context)
 

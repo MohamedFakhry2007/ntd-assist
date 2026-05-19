@@ -9,12 +9,31 @@ app_file: app.py
 pinned: false
 ---
 
-# 🦟 NTD-Assist
-## Edge-Deployed Clinical Multimodal AI with Biological Validation Guardrails
+# NTD-Assist
 
-> Offline microscopy assistant for Neglected Tropical Diseases — powered by MedGemma 4B, hardened with rule-based morphology validation to prevent biologically impossible diagnoses.
+Clinically-constrained multimodal AI for microscopy-based infectious disease screening.
+
+NTD-Assist combines:
+- multimodal medical LLMs
+- biological validation guardrails
+- offline edge deployment
+- structured clinical reasoning
+
+to reduce biologically impossible outputs in low-resource diagnostic environments.
+
+Built for neglected tropical disease microscopy workflows using MedGemma + rule-based morphology enforcement.
 
 [![Try on HF Spaces](https://img.shields.io/badge/%F0%A4%8D-Try%20on%20HF%20Spaces-brightgreen)](https://huggingface.co/spaces/mofary/ntd-assist)
+---
+
+## Why Guardrails Matter
+
+| Raw LLM Output                   | Biological Violation            | Guardrail Action |
+| -------------------------------- | ------------------------------- | ---------------- |
+| Malaria in tissue biopsy         | Plasmodium requires blood smear | Blocked          |
+| Amastigote inside RBC            | Wrong host cell                 | Flagged          |
+| Oversized intracellular parasite | Morphometric impossibility      | Review triggered |
+
 ---
 
 ## 🔑 Why This Matters

@@ -1,21 +1,8 @@
-from pydantic import BaseModel
-from typing import Literal
+from vlm_guard.core.analysis import Analysis
+from vlm_guard.plugins.ntd_microscopy.schema import ntd_analysis_from_dict
 
 
-class ClinicalAnalysis(BaseModel):
-    model_config = {"extra": "forbid", "validate_assignment": True}
-
-    detected_disease: Literal[
-        "Malaria", "Leishmaniasis", "Schistosomiasis",
-        "Filariasis", "Trypanosomiasis", "Onchocerciasis",
-        "Loiasis", "Negative for Parasites", "Unclear"
-    ]
-    severity: Literal["Scanty (+)", "Moderate (++)", "Heavy (+++)", "N/A"]
-    morphology_proof: str
-    confidence: Literal["High", "Medium", "Low"]
-    findings: str
-    recommendation: str
-    species: str = "Unknown"
-    observed_background: str = ""
-    observed_organisms: str = ""
-    organism_location: str = ""
+def build_ntd_analysis(**kwargs) -> Analysis:
+    if "detected_disease" in kwargs:
+        kwargs["label"] = kwargs.pop("detected_disease")
+    return ntd_analysis_from_dict(kwargs)
