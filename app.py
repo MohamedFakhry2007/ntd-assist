@@ -183,12 +183,12 @@ def main():
             if show_enhanced and use_enhancement:
                 col_orig, col_enh = st.columns(2)
                 with col_orig:
-                    st.image(img, caption="📷 Original", use_container_width=True)
+                    st.image(img, caption="📷 Original", use_column_width=True)
                 with col_enh:
                     enhanced_preview = enhance_image(img, sample, log=log_debug)
-                    st.image(enhanced_preview, caption="✨ Enhanced", use_container_width=True)
+                    st.image(enhanced_preview, caption="✨ Enhanced", use_column_width=True)
             else:
-                st.image(img, caption=f"📷 {uploaded.name}", use_container_width=True)
+                st.image(img, caption=f"📷 {uploaded.name}", use_column_width=True)
 
             warnings = check_image_quality(img, log=log_debug)
             if warnings:
