@@ -118,11 +118,13 @@ streamlit run app.py
 
 ### 🚀 Deploy to Hugging Face Spaces
 
-[![Hugging Face Spaces](https://img.shields.io/badge/%F0%A4%8D-A%2Fntd--assist-blue)](https://huggingface.co/spaces)
+[![Hugging Face Spaces](https://img.shields.io/badge/%F0%A4%8D-Open%20on%20HF%20Spaces-blue)](https://huggingface.co/spaces/mofary/ntd-assist)
 
-One-click deploy to HF Spaces (free tier works — no GPU required):
+**Try it now:** [https://huggingface.co/spaces/mofary/ntd-assist](https://huggingface.co/spaces/mofary/ntd-assist)
 
-1. **Create a Space** at [huggingface.co/spaces](https://huggingface.co/spaces), select **Streamlit** SDK, and connect your GitHub repo.
+One-click deploy your own copy to HF Spaces (free tier works — no GPU required):
+
+1. Fork the repo and create a Space at [huggingface.co/spaces](https://huggingface.co/spaces), select **Streamlit** SDK, and connect your GitHub fork.
 2. The app auto-detects the environment:
    - **GPU available** → MedGemma 4B (full accuracy)
    - **CPU only / HF Space free tier** → Qwen2-VL-2B-Instruct (lightweight fallback)
