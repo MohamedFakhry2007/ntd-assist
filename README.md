@@ -61,7 +61,7 @@ if location == "inside_RBC" and organism_size > 7μm:
 ```mermaid
 graph LR
     A[Microscopy Image] --> B[Domain-Specific Enhancement]
-    B --> C[MedGemma 4B-IT<br/>(4-bit quantized)]
+    B --> C[MedGemma 4B-IT]
     C --> D[Morphology Guardrails Engine]
     D --> E[Structured Diagnosis JSON]
     E --> F[PDF Report + Audit Trail]
