@@ -196,7 +196,7 @@ def main():
 
             st.markdown("---")
 
-            if st.button("🔬 Analyze Slide", type="primary", use_container_width=True):
+            if st.button("🔬 Analyze Slide", type="primary"):
 
                 progress_bar = st.progress(0)
                 status_text = st.empty()
@@ -260,7 +260,6 @@ def main():
                         data=pdf_bytes,
                         file_name=f"NTD_Report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
                         mime="application/pdf",
-                        use_container_width=True
                     )
 
                 st.caption(f"⏱️ Analysis completed in {elapsed:.1f}s | Status: {status}")
