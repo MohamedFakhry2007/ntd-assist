@@ -1,12 +1,17 @@
 import streamlit as st
 import torch
 from transformers import AutoProcessor, AutoModelForImageTextToText, BitsAndBytesConfig
-from PIL import Image, ImageStat, ImageEnhance, ImageOps, ImageChops, ImageFilter
+from PIL import Image, ImageStat, ImageEnhance, ImageOps, ImageFilter, UnidentifiedImageError
 from pydantic import BaseModel
 from typing import Literal
+from collections import OrderedDict
 import re
 import datetime
 import time
+import json
+import io
+import hashlib
+import unicodedata
 from fpdf import FPDF
 import traceback
 
@@ -23,12 +28,16 @@ st.set_page_config(
 if "debug_log" not in st.session_state:
     st.session_state.debug_log = []
 
+DEBUG_LOG_MAX = 50
+
 def log_debug(stage: str, data):
     st.session_state.debug_log.append({
         "timestamp": datetime.datetime.now().isoformat(),
         "stage": stage,
         "data": str(data)[:2000]
     })
+    if len(st.session_state.debug_log) > DEBUG_LOG_MAX:
+        st.session_state.debug_log = st.session_state.debug_log[-DEBUG_LOG_MAX:]
 
 # ==========================================
 # 2. MODEL LOADING
@@ -36,22 +45,30 @@ def log_debug(stage: str, data):
 @st.cache_resource(show_spinner=False)
 def load_medgemma():
     model_id = "google/medgemma-4b-it"
-    
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16
-    )
+    has_cuda = torch.cuda.is_available()
 
     try:
         processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
-        model = AutoModelForImageTextToText.from_pretrained(
-            model_id,
-            quantization_config=bnb_config,
-            device_map="auto",
-            trust_remote_code=True,
-            torch_dtype=torch.bfloat16
-        )
+        if has_cuda:
+            bnb_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch.bfloat16
+            )
+            model = AutoModelForImageTextToText.from_pretrained(
+                model_id,
+                quantization_config=bnb_config,
+                device_map="auto",
+                trust_remote_code=True,
+                torch_dtype=torch.bfloat16
+            )
+        else:
+            model = AutoModelForImageTextToText.from_pretrained(
+                model_id,
+                device_map={"": "cpu"},
+                trust_remote_code=True,
+                torch_dtype=torch.float32
+            )
         return processor, model, None
     except Exception as e:
         return None, None, str(e)
@@ -59,176 +76,194 @@ def load_medgemma():
 # ==========================================
 # 3. IMAGE ENHANCEMENT
 # ==========================================
-from PIL import ImageChops
+
+_ENHANCE_CACHE: "OrderedDict[tuple, Image.Image]" = OrderedDict()
+_ENHANCE_CACHE_MAX = 4
+
+def _image_hash(image: Image.Image) -> str:
+    return hashlib.sha1(image.tobytes()).hexdigest()
 
 def enhance_image(image, sample_type):
     """
     Expert Enhancement: Uses Green-Channel separation to target chromatin.
     In Giemsa/Wright stains, parasites (purple/red) absorb Green light,
     making the Green channel the most information-dense for structure.
+    Cached by (image hash, sample_type) so preview + inference don't double-process.
     """
     # Ensure RGB
     if image.mode != 'RGB':
         image = image.convert('RGB')
-    
+
+    cache_key = (_image_hash(image), sample_type.lower())
+    cached = _ENHANCE_CACHE.get(cache_key)
+    if cached is not None:
+        _ENHANCE_CACHE.move_to_end(cache_key)
+        return cached
+
     # Split channels
     r, g, b = image.split()
-    
+
     # 1. CHROMATIN BOOST (The "Pathologist's Filter")
     # Invert Green channel to make purple objects bright, use as mask for sharpening
     structure_mask = ImageOps.invert(g)
-    
+
     # Base enhancement
-    enhanced = ImageOps.autocontrast(image, cutoff=0.5) 
-    
+    enhanced = ImageOps.autocontrast(image, cutoff=0.5)
+
     if "blood" in sample_type.lower():
         # Blood Smears: Highlight chromatin dots (rings)
-        # Increase Saturation to separate blue cytoplasm from red chromatin
         enhancer = ImageEnhance.Color(enhanced)
-        enhanced = enhancer.enhance(1.8) # High color boost for Giemsa
-        
-        # Increase Contrast
+        enhanced = enhancer.enhance(1.8)
+
         enhancer = ImageEnhance.Contrast(enhanced)
         enhanced = enhancer.enhance(1.4)
-        
-        # Adaptive Sharpening using the Green Channel info
-        # Only sharpen areas that are dark in the green channel (nuclei/chromatin)
+
         sharpened = enhanced.filter(ImageFilter.UnsharpMask(radius=2, percent=150, threshold=3))
         enhanced = Image.composite(sharpened, enhanced, structure_mask)
 
     elif "tissue" in sample_type.lower() or "biopsy" in sample_type.lower():
-        # Tissue: Needs brightness balance to see inside macrophages
-        enhanced = ImageOps.equalize(enhanced) # Histogram equalization helps tissue texture
-        
+        enhanced = ImageOps.equalize(enhanced)
         enhancer = ImageEnhance.Contrast(enhanced)
         enhanced = enhancer.enhance(1.2)
-        
         enhancer = ImageEnhance.Sharpness(enhanced)
         enhanced = enhancer.enhance(1.3)
-        
+
     elif "skin" in sample_type.lower():
-        # Skin Snips (Onchocerca): Needs edge detection for transparency
+        # Skin Snips (Onchocerca): use edges as a sharpening mask, not a color replacement.
         enhancer = ImageEnhance.Contrast(enhanced)
-        enhanced = enhancer.enhance(1.5)
-        enhanced = enhanced.filter(ImageFilter.FIND_EDGES) # Experimental: highlight worm outlines
-        # Blend back with original to keep context
-        enhanced = Image.blend(image, enhanced.convert('RGB'), alpha=0.3)
+        base = enhancer.enhance(1.5)
+        sharpened = base.filter(ImageFilter.UnsharpMask(radius=2, percent=200, threshold=2))
+        # Edge map (single-channel) brightens worm/cell outlines and modulates the composite
+        edge_mask = base.convert("L").filter(ImageFilter.FIND_EDGES)
+        edge_mask = ImageOps.autocontrast(edge_mask, cutoff=1)
+        enhanced = Image.composite(sharpened, base, edge_mask)
 
     else:
-        # General backup
-        enhanced = ImageOps.autocontrast(enhanced, cutoff=1)
         enhancer = ImageEnhance.Sharpness(enhanced)
         enhanced = enhancer.enhance(1.5)
 
+    _ENHANCE_CACHE[cache_key] = enhanced
+    if len(_ENHANCE_CACHE) > _ENHANCE_CACHE_MAX:
+        _ENHANCE_CACHE.popitem(last=False)
     return enhanced
 
 def check_image_quality(image):
     """
-    Expert Quality Check: Looks for blur (Laplacian variance) 
+    Expert Quality Check: Looks for blur (Laplacian variance)
     and stain quality (Color balance).
     """
-    gray = image.convert("L")
-    stat = ImageStat.Stat(gray)
-    warnings = []
-    
-    # 1. Blur Detection (Laplacian Variance)
-    # A sharp microscopy image usually has variance > 500
-    edges = image.filter(ImageFilter.FIND_EDGES)
-    edge_stat = ImageStat.Stat(edges.convert("L"))
-    if edge_stat.var[0] < 20: # Threshold depends on resolution, strictly low here means blur
-        warnings.append("Blurry/Out of Focus")
+    try:
+        gray = image.convert("L")
+        stat = ImageStat.Stat(gray)
+        warnings = []
 
-    # 2. Exposure
-    if stat.mean[0] < 40:
-        warnings.append("Too Dark (Underexposed)")
-    if stat.mean[0] > 240:
-        warnings.append("Overexposed (Washed out)")
-        
-    # 3. Stain Quality (Red/Blue Ratio) - Rudimentary Giemsa check
-    # Giemsa images should have significant Blue and Red channels.
-    r, g, b = image.split()
-    mean_r = ImageStat.Stat(r).mean[0]
-    mean_b = ImageStat.Stat(b).mean[0]
-    
-    if abs(mean_r - mean_b) < 5: # If R and B are identical, it might be grayscale
-        warnings.append("Low Color Information (Possible Grayscale?)")
+        edges = image.filter(ImageFilter.FIND_EDGES)
+        edge_stat = ImageStat.Stat(edges.convert("L"))
+        if edge_stat.var[0] < 20:
+            warnings.append("Blurry/Out of Focus")
 
-    log_debug("IMAGE_QUALITY", f"Mean: {stat.mean[0]:.0f}, EdgeVar: {edge_stat.var[0]:.0f}")
-    return warnings
+        if stat.mean[0] < 40:
+            warnings.append("Too Dark (Underexposed)")
+        if stat.mean[0] > 240:
+            warnings.append("Overexposed (Washed out)")
+
+        r, g, b = image.split()
+        mean_r = ImageStat.Stat(r).mean[0]
+        mean_b = ImageStat.Stat(b).mean[0]
+
+        if abs(mean_r - mean_b) < 5:
+            warnings.append("Low Color Information (Possible Grayscale?)")
+
+        log_debug("IMAGE_QUALITY", f"Mean: {stat.mean[0]:.0f}, EdgeVar: {edge_stat.var[0]:.0f}")
+        return warnings
+    except Exception as e:
+        log_debug("QUALITY_ERROR", traceback.format_exc())
+        return ["Quality check failed — image may be corrupt"]
     
 # ==========================================
 # 4. PDF GENERATION
 # ==========================================
+def _latinize(s: str) -> str:
+    """Make a string safe for FPDF's latin-1 codepage. Decomposes accents,
+    replaces \u03bc\u2192u, then falls back to '?' for anything still unmappable."""
+    if s is None:
+        return ""
+    s = str(s).replace("\u03bc", "u")
+    s = unicodedata.normalize("NFKD", s)
+    return s.encode("latin-1", "replace").decode("latin-1")
+
 def create_pdf(res, sample_type, stain, magnification, context):
     """Generate PDF diagnostic report"""
     pdf = FPDF()
     pdf.add_page()
-    
+
     # Header
     pdf.set_font("Arial", "B", 18)
     pdf.cell(0, 12, "NTD-Assist Diagnostic Report", ln=True, align="C")
     pdf.ln(5)
-    
+
     # Report info
     pdf.set_font("Arial", "", 10)
     pdf.cell(0, 6, f"Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ln=True)
     pdf.ln(3)
-    
+
     # Sample details box
     pdf.set_font("Arial", "B", 12)
     pdf.cell(0, 8, "Sample Information", ln=True)
     pdf.set_font("Arial", "", 11)
-    pdf.cell(0, 6, f"Sample Type: {sample_type}", ln=True)
-    pdf.cell(0, 6, f"Stain: {stain}", ln=True)
-    pdf.cell(0, 6, f"Magnification: {magnification}", ln=True)
-    pdf.cell(0, 6, f"Patient Context: {context if context else 'Not provided'}", ln=True)
+    pdf.cell(0, 6, _latinize(f"Sample Type: {sample_type}"), ln=True)
+    pdf.cell(0, 6, _latinize(f"Stain: {stain}"), ln=True)
+    pdf.cell(0, 6, _latinize(f"Magnification: {magnification}"), ln=True)
+    pdf.cell(0, 6, _latinize(f"Patient Context: {context if context else 'Not provided'}"), ln=True)
     pdf.ln(5)
-    
+
     # Diagnosis box
     pdf.set_font("Arial", "B", 14)
     pdf.set_fill_color(255, 230, 230) if res.detected_disease not in ["Negative for Parasites", "Unclear"] else pdf.set_fill_color(230, 255, 230)
-    pdf.cell(0, 10, f"DIAGNOSIS: {res.detected_disease}", ln=True, fill=True)
-    
+    pdf.cell(0, 10, _latinize(f"DIAGNOSIS: {res.detected_disease}"), ln=True, fill=True)
+
     pdf.set_font("Arial", "", 11)
-    pdf.cell(0, 7, f"Species: {res.species}", ln=True)
-    pdf.cell(0, 7, f"Severity: {res.severity}", ln=True)
-    pdf.cell(0, 7, f"Confidence: {res.confidence}", ln=True)
+    pdf.cell(0, 7, _latinize(f"Species: {res.species}"), ln=True)
+    pdf.cell(0, 7, _latinize(f"Severity: {res.severity}"), ln=True)
+    pdf.cell(0, 7, _latinize(f"Confidence: {res.confidence}"), ln=True)
     pdf.ln(5)
-    
+
     # Findings
     pdf.set_font("Arial", "B", 12)
     pdf.cell(0, 8, "Morphological Evidence", ln=True)
     pdf.set_font("Arial", "", 10)
-    morphology = res.morphology_proof.replace('\u03bc', 'u').replace('\u03bcm', 'um')
-    pdf.multi_cell(0, 6, morphology)
+    pdf.multi_cell(0, 6, _latinize(res.morphology_proof))
     pdf.ln(3)
-    
+
     pdf.set_font("Arial", "B", 12)
     pdf.cell(0, 8, "Detailed Findings", ln=True)
     pdf.set_font("Arial", "", 10)
-    findings = res.findings.replace('\u03bc', 'u').replace('\u03bcm', 'um')
-    pdf.multi_cell(0, 6, findings)
+    pdf.multi_cell(0, 6, _latinize(res.findings))
     pdf.ln(3)
-    
+
     pdf.set_font("Arial", "B", 12)
     pdf.cell(0, 8, "Recommendation", ln=True)
     pdf.set_font("Arial", "", 10)
-    recommendation = res.recommendation.replace('\u03bc', 'u').replace('\u03bcm', 'um')
-    pdf.multi_cell(0, 6, recommendation)
+    pdf.multi_cell(0, 6, _latinize(res.recommendation))
     pdf.ln(5)
-    
+
     # Disclaimer
     pdf.set_font("Arial", "I", 9)
     pdf.multi_cell(0, 5, "DISCLAIMER: This AI-assisted analysis is for educational and screening purposes only. "
                          "All findings must be confirmed by a qualified medical professional. "
                          "Do not use as sole basis for clinical decisions.")
-    
-    return pdf.output(dest="S").encode("latin-1")
+
+    out = pdf.output(dest="S")
+    if isinstance(out, str):
+        return out.encode("latin-1", "replace")
+    return bytes(out)
 
 # ==========================================
 # 5. SCHEMA
 # ==========================================
 class ClinicalAnalysis(BaseModel):
+    model_config = {"extra": "forbid", "validate_assignment": True}
+
     detected_disease: Literal[
         "Malaria", "Leishmaniasis", "Schistosomiasis",
         "Filariasis", "Trypanosomiasis", "Onchocerciasis",
@@ -513,34 +548,37 @@ def apply_morphology_guardrails(res: ClinicalAnalysis, sample_type: str = "") ->
     # FILARIA vs TRYPANOSOME - MOST IMPORTANT FIX
     # =========================
     if sample_type.lower().startswith("blood smear"):
-        disease = res.detected_disease.lower()
         findings = (res.findings + " " + res.morphology_proof).lower()
-        
+
         if "microfilaria" in findings or "sheathed" in findings:
-            res.detected_disease = "Filariasis"
-            res.species = "Wuchereria bancrofti"
-            
+            res = res.model_copy(update={
+                "detected_disease": "Filariasis",
+                "species": "Wuchereria bancrofti",
+            })
         elif any(x in findings for x in ["undulating membrane", "free flagellum", "kinetoplast"]):
-            res.detected_disease = "Trypanosomiasis"
-            
+            res = res.model_copy(update={"detected_disease": "Trypanosomiasis"})
         else:
             # Ambiguous extracellular worm
-            res.confidence = "Moderate"
-            res.recommendation += (
-                " Morphology is ambiguous between microfilaria and trypanosome; "
-                "evaluate sheath, nuclear pattern, and tail morphology."
-            )
-    
+            res = res.model_copy(update={
+                "confidence": "Medium",
+                "recommendation": res.recommendation + (
+                    " Morphology is ambiguous between microfilaria and trypanosome; "
+                    "evaluate sheath, nuclear pattern, and tail morphology."
+                ),
+            })
+
     # =========================
     # SAMPLE-TYPE PRIORITY RULE (Critical for Thick Smear)
     # =========================
     if "thick" in sample_type.lower():
         if res.detected_disease == "Trypanosomiasis":
-            res.confidence = "Moderate"
-            res.recommendation += (
-                " Thick blood smears are more commonly used for microfilariae detection; "
-                "consider Filariasis if sheath or nuclear column is identified."
-            )
+            res = res.model_copy(update={
+                "confidence": "Medium",
+                "recommendation": res.recommendation + (
+                    " Thick blood smears are more commonly used for microfilariae detection; "
+                    "consider Filariasis if sheath or nuclear column is identified."
+                ),
+            })
     
     t = (res.morphology_proof + " " + res.findings + " " + 
          res.observed_organisms + " " + res.observed_background).lower()
@@ -707,9 +745,9 @@ def apply_morphology_guardrails(res: ClinicalAnalysis, sample_type: str = "") ->
         # Species correction
         if res.species == "Unknown":
             if says_multiple_rings or says_crescent:
-                res.species = "P. falciparum"
+                res = res.model_copy(update={"species": "P. falciparum"})
             elif says_schuffner or says_band_form:
-                res.species = "P. vivax" if says_schuffner else "P. malariae"
+                res = res.model_copy(update={"species": "P. vivax" if says_schuffner else "P. malariae"})
     
     # ═══════════════════════════════════════════════════════════════
     # RULE 4: TRYPANOSOMIASIS VALIDATION
@@ -736,9 +774,9 @@ def apply_morphology_guardrails(res: ClinicalAnalysis, sample_type: str = "") ->
         
         # Species correction
         if says_c_shaped:
-            res.species = "Trypanosoma cruzi"
+            res = res.model_copy(update={"species": "Trypanosoma cruzi"})
         elif is_csf_sample:
-            res.species = "Trypanosoma brucei"
+            res = res.model_copy(update={"species": "Trypanosoma brucei"})
     
     # ═══════════════════════════════════════════════════════════════
     # RULE 5: FILARIASIS VALIDATION  
@@ -754,9 +792,9 @@ def apply_morphology_guardrails(res: ClinicalAnalysis, sample_type: str = "") ->
         
         # Species correction
         if says_sheathed and says_tail_nuclei:
-            res.species = "Brugia malayi"
+            res = res.model_copy(update={"species": "Brugia malayi"})
         elif says_sheathed:
-            res.species = "Wuchereria bancrofti"
+            res = res.model_copy(update={"species": "Wuchereria bancrofti"})
     
     # ═══════════════════════════════════════════════════════════════
     # RULE 5.1: SCHISTOSOMIASIS VALIDATION
@@ -772,9 +810,9 @@ def apply_morphology_guardrails(res: ClinicalAnalysis, sample_type: str = "") ->
         
         # Species correction
         if "terminal spine" in t:
-            res.species = "Schistosoma haematobium"
+            res = res.model_copy(update={"species": "Schistosoma haematobium"})
         elif "lateral spine" in t:
-            res.species = "Schistosoma mansoni"
+            res = res.model_copy(update={"species": "Schistosoma mansoni"})
     
     # ═══════════════════════════════════════════════════════════════
     # RULE 5.2: ONCHOCERCIASIS / LOIASIS VALIDATION
@@ -935,8 +973,8 @@ def apply_morphology_guardrails(res: ClinicalAnalysis, sample_type: str = "") ->
 
 def run_agent(image, sample_type, magnification, stain, patient_context, processor, model, use_enhancement=True):
     """Run the MedGemma inference pipeline"""
-    st.session_state.debug_log = []
-    
+    log_debug("RUN_START", f"---- {datetime.datetime.now().isoformat()} ----")
+
     # Image enhancement
     if use_enhancement:
         processed_image = enhance_image(image, sample_type)
@@ -972,22 +1010,34 @@ def run_agent(image, sample_type, magnification, stain, patient_context, process
             padding=True
         )
         inputs = {k: v.to(model.device) for k, v in inputs.items()}
-        
+
         log_debug("INPUT_TOKENS", f"{inputs['input_ids'].shape[1]} tokens")
-        
+
         if 'pixel_values' in inputs:
             log_debug("IMAGE_PROCESSED", f"Shape: {inputs['pixel_values'].shape}")
         else:
             log_debug("IMAGE_WARNING", "No pixel_values in inputs!")
 
-        # Generate response
-        with torch.no_grad():
-            output = model.generate(
-                **inputs,
-                max_new_tokens=600,
-                do_sample=False,
-                temperature=0.0,
-            )
+        # Generate response (with one retry for transient errors / OOM)
+        def _generate(max_new_tokens):
+            with torch.no_grad():
+                return model.generate(
+                    **inputs,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=False,
+                    temperature=0.0,
+                )
+
+        try:
+            output = _generate(600)
+        except torch.cuda.OutOfMemoryError:
+            log_debug("OOM_RETRY", "CUDA OOM; clearing cache and retrying with fewer tokens")
+            torch.cuda.empty_cache()
+            output = _generate(400)
+        except Exception as gen_err:
+            log_debug("GEN_RETRY", f"Transient error, retrying once: {gen_err}")
+            time.sleep(1)
+            output = _generate(600)
 
         # Decode
         input_len = inputs["input_ids"].shape[1]
@@ -1016,31 +1066,27 @@ def run_agent(image, sample_type, magnification, stain, patient_context, process
         
         if json_match:
             json_str = json_match.group()
-            # Parse and validate
-            import json
             parsed = json.loads(json_str)
-            
+
             # Ensure required fields exist with defaults
             parsed.setdefault("observed_background", "")
-            parsed.setdefault("observed_organisms", "")  
+            parsed.setdefault("observed_organisms", "")
             parsed.setdefault("organism_location", "")
             parsed.setdefault("species", "Unknown")
             parsed.setdefault("severity", "N/A")
-            
+
+            # Strip any unexpected fields the model may have hallucinated
+            # (model_config has extra="forbid" so this guards against ValidationError)
+            allowed = set(ClinicalAnalysis.model_fields.keys())
+            parsed = {k: v for k, v in parsed.items() if k in allowed}
+
             result = ClinicalAnalysis(**parsed)
 
-            # Apply morphology guardrails
+            # Apply morphology guardrails (single source of truth for species)
             result = apply_morphology_guardrails(
                 result,
                 sample_type=sample_type
             )
-            
-            # =========================
-            # SPECIES INFERENCE RULE
-            # =========================
-            # Species only resolved when morphology + context align
-            if result.confidence != "High" or "consistent with" not in result.morphology_proof.lower():
-                result.species = "Unknown"
 
             return result, decoded
 
@@ -1177,6 +1223,8 @@ def main():
         return
     
     model_status.success("✅ Model Ready")
+    if not torch.cuda.is_available():
+        st.sidebar.info("ℹ️ Running on CPU (slow — GPU not detected)")
     
     # ===== MAIN CONTENT =====
     st.header("🔬 NTD-Assist | Microscopy Analysis")
@@ -1200,9 +1248,22 @@ def main():
     
     with col2:
         if uploaded:
-            # Load image
-            img = Image.open(uploaded).convert("RGB")
-            
+            MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+            MAX_PIXELS = 25_000_000
+            if getattr(uploaded, "size", 0) > MAX_UPLOAD_BYTES:
+                st.error(f"Image is {uploaded.size / 1024 / 1024:.1f} MB — limit is 10 MB. Please downsample and retry.")
+                st.stop()
+
+            try:
+                img = Image.open(uploaded).convert("RGB")
+            except (UnidentifiedImageError, OSError) as e:
+                st.error(f"Could not read image file: {e}")
+                st.stop()
+
+            if img.size[0] * img.size[1] > MAX_PIXELS:
+                img.thumbnail((4096, 4096), Image.LANCZOS)
+                st.info("Image downscaled to 4096px for processing")
+
             # Display images
             if show_enhanced and use_enhancement:
                 col_orig, col_enh = st.columns(2)
