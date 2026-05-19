@@ -145,7 +145,7 @@ One-click deploy your own copy to HF Spaces (free tier works — no GPU required
 |----------|------|
 | ▶️ Video Demo | [YouTube: 3-min walkthrough](https://youtu.be/EDyQBqOuHqk) |
 | 💻 Executable Notebook | [Kaggle: NTD-Assist Notebook](https://www.kaggle.com/code/mohamedfakhrysmile/ntd-assist-notebook) |
-| 🤗 Model Card | *(coming soon)* |
+| 🤗 Live Demo | [HF Spaces: mofary/ntd-assist](https://huggingface.co/spaces/mofary/ntd-assist) |
 | 📝 Technical Deep-Dive | *(coming soon)* |
 
 ---
