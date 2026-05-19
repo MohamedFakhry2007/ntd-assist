@@ -1,3 +1,14 @@
+---
+title: NTD-Assist
+emoji: 🦟
+colorFrom: green
+colorTo: blue
+sdk: streamlit
+sdk_version: 1.28.0
+app_file: app.py
+pinned: false
+---
+
 # 🦟 NTD-Assist
 ## Edge-Deployed Clinical Multimodal AI with Biological Validation Guardrails
 
@@ -102,6 +113,27 @@ streamlit run app.py
 ```
 
 > 💡 Tested on: RTX 3060 (12GB), RTX 4090, Google Colab T4
+
+---
+
+### 🚀 Deploy to Hugging Face Spaces
+
+[![Hugging Face Spaces](https://img.shields.io/badge/%F0%A4%8D-A%2Fntd--assist-blue)](https://huggingface.co/spaces)
+
+One-click deploy to HF Spaces (free tier works — no GPU required):
+
+1. **Create a Space** at [huggingface.co/spaces](https://huggingface.co/spaces), select **Streamlit** SDK, and connect your GitHub repo.
+2. The app auto-detects the environment:
+   - **GPU available** → MedGemma 4B (full accuracy)
+   - **CPU only / HF Space free tier** → Qwen2-VL-2B-Instruct (lightweight fallback)
+3. **Optional GitHub secret** (only if you want GPU MedGemma in a paid Space):
+   - `HF_TOKEN`: Your Hugging Face token with gated-model access
+4. Done — the `setup.sh` pre-caches the CPU model during build.
+
+| Tier | Model | Performance |
+|------|-------|-------------|
+| Free (2 vCPU, 16GB, no GPU) | Qwen2-VL-2B-Instruct | ~45-90s per image |
+| Paid (T4 GPU, 16GB) | MedGemma 4B | ~10-30s per image |
 
 ---
 

@@ -11,5 +11,6 @@ nest_asyncio>=1.5.0
 matplotlib>=3.7.0
 seaborn>=0.12.0
 pandas>=2.0.0
+qwen-vl-utils>=0.0.8
 # dev
 pytest>=7.0.0

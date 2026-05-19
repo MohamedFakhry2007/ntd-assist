@@ -26,6 +26,8 @@ MAX_NEW_TOKENS = 600
 MAX_NEW_TOKENS_OOM_RETRY = 400
 GEN_RETRY_SLEEP_SEC = 1
 MODEL_ID = "google/medgemma-4b-it"
+CPU_MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct"
+USE_CPU_MODEL = False  # set True to force CPU fallback (auto-set on HF Spaces)
 
 # Upload limits
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024

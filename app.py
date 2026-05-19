@@ -7,7 +7,7 @@ from PIL import Image, UnidentifiedImageError
 
 from ntd_assist import config
 from ntd_assist.image_processing import enhance_image, check_image_quality
-from ntd_assist.inference import load_medgemma, run_agent
+from ntd_assist.inference import load_model, run_agent
 from ntd_assist.pdf_report import create_pdf
 
 
@@ -33,8 +33,8 @@ def log_debug(stage: str, data):
 
 
 @st.cache_resource(show_spinner=False)
-def _cached_load_medgemma():
-    return load_medgemma()
+def _cached_load_model():
+    return load_model()
 
 
 def main():
@@ -128,14 +128,14 @@ def main():
 
     model_status.info("⏳ Loading model...")
 
-    with st.spinner("🔄 Loading MedGemma (1-2 min on first run)..."):
-        processor, model, error = _cached_load_medgemma()
+    with st.spinner("🔄 Loading model (1-2 min on first run)..."):
+        processor, model, error = _cached_load_model()
 
     if error:
         model_status.error("❌ Model failed")
         st.error(f"**Model Loading Error:**\n```\n{error}\n```")
         st.info("**Troubleshooting:**\n"
-                "1. Verify HF_TOKEN has MedGemma access\n"
+                "1. Verify HF_TOKEN has model access (if using a gated model)\n"
                 "2. Check GPU memory availability\n"
                 "3. Try restarting the kernel")
         return

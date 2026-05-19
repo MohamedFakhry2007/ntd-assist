@@ -14,6 +14,37 @@ from .prompt import build_minimal_prompt
 from .schema import ClinicalAnalysis
 
 
+def load_cpu_model():
+    """Load Qwen2-VL-2B-Instruct on CPU for HF Spaces / no-GPU environments"""
+    try:
+        min_pixels = 256 * 28 * 28
+        max_pixels = 640 * 28 * 28
+        processor = AutoProcessor.from_pretrained(
+            config.CPU_MODEL_ID,
+            trust_remote_code=True,
+            min_pixels=min_pixels,
+            max_pixels=max_pixels,
+        )
+        model = AutoModelForImageTextToText.from_pretrained(
+            config.CPU_MODEL_ID,
+            device_map={"": "cpu"},
+            trust_remote_code=True,
+            torch_dtype=torch.float32,
+        )
+        return processor, model, None
+    except Exception as e:
+        return None, None, str(e)
+
+
+def load_model():
+    """Auto-select model: MedGemma if GPU available, Qwen2-VL on CPU otherwise"""
+    if config.USE_CPU_MODEL:
+        return load_cpu_model()
+    if torch.cuda.is_available():
+        return load_medgemma()
+    return load_cpu_model()
+
+
 def load_medgemma():
     has_cuda = torch.cuda.is_available()
     try:
