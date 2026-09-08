@@ -29,7 +29,8 @@ def load_cpu_model():
             config.CPU_MODEL_ID,
             device_map={"": "cpu"},
             trust_remote_code=True,
-            torch_dtype=torch.float32,
+            torch_dtype=torch.bfloat16,
+            low_cpu_mem_usage=True,
         )
         return processor, model, None
     except Exception as e:
